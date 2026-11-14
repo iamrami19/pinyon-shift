@@ -1,9 +1,9 @@
 diff --git a/include/rex/system/ios_guest_backing.h b/include/rex/system/ios_guest_backing.h
 new file mode 100644
-index 0000000..b16788c
+index 0000000..47b4623
 --- /dev/null
 +++ b/include/rex/system/ios_guest_backing.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,42 @@
 +#pragma once
 +
 +#include <mach/mach.h>
@@ -35,8 +35,10 @@ index 0000000..b16788c
 +                           memory_object_offset_t offset) const {
 +    auto address = reinterpret_cast<vm_address_t>(destination);
 +    constexpr vm_prot_t access = VM_PROT_READ | VM_PROT_WRITE;
-+    return vm_map_64(mach_task_self(), &address, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
-+                     entry_, offset, false, access, access, VM_INHERIT_NONE);
++    static_assert(sizeof(vm_offset_t) >= sizeof(memory_object_offset_t));
++    return vm_map(mach_task_self(), &address, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
++                  entry_, static_cast<vm_offset_t>(offset), false, access, access,
++                  VM_INHERIT_NONE);
 +  }
 +
 + private:
