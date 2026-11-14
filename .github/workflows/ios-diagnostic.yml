@@ -47,11 +47,12 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
             -DMOLTENVK_XCFRAMEWORK="$mvk/Package/Latest/MoltenVK/static/MoltenVK.xcframework"
           cmake --build build/ios-probe --config Debug --target pinyon_ios_probe \
-            -- CODE_SIGNING_ALLOWED=NO "CONFIGURATION_BUILD_DIR=$PWD/build/ios-product"
+            -- CODE_SIGNING_ALLOWED=NO
 
       - name: Verify and archive the unsigned app
         run: |
-          app=build/ios-product/PinyonShiftProbe.app
+          app=$(find build/ios-probe -type d -name PinyonShiftProbe.app -prune -print)
+          test -x "$app/PinyonShiftProbe"
           plutil -lint "$app/Info.plist"
           test "$(xcrun lipo -archs "$app/PinyonShiftProbe")" = arm64
           xcrun vtool -show-build "$app/PinyonShiftProbe" | tee build/ios-platform.txt
