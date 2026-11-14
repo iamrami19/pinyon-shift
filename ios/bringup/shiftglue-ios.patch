@@ -1,0 +1,174 @@
+diff --git a/include/rex/system/ios_guest_backing.h b/include/rex/system/ios_guest_backing.h
+new file mode 100644
+index 0000000..b16788c
+--- /dev/null
++++ b/include/rex/system/ios_guest_backing.h
+@@ -0,0 +1,40 @@
++#pragma once
++
++#include <mach/mach.h>
++#include <mach/vm_map.h>
++
++namespace rex::memory::ios {
++
++// A named Mach memory object provides shared backing without a filesystem name.
++class GuestBacking {
++ public:
++  GuestBacking() = default;
++  GuestBacking(const GuestBacking&) = delete;
++  GuestBacking& operator=(const GuestBacking&) = delete;
++
++  ~GuestBacking() {
++    if (entry_ != MACH_PORT_NULL) {
++      mach_port_deallocate(mach_task_self(), entry_);
++    }
++  }
++
++  kern_return_t Create(memory_object_size_t size) {
++    return mach_make_memory_entry_64(mach_task_self(), &size, 0,
++                                    MAP_MEM_NAMED_CREATE | VM_PROT_READ | VM_PROT_WRITE,
++                                    &entry_, MACH_PORT_NULL);
++  }
++
++  // The caller owns the entire reserved range containing this view.
++  kern_return_t MapReserved(void* destination, vm_size_t size,
++                           memory_object_offset_t offset) const {
++    auto address = reinterpret_cast<vm_address_t>(destination);
++    constexpr vm_prot_t access = VM_PROT_READ | VM_PROT_WRITE;
++    return vm_map_64(mach_task_self(), &address, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
++                     entry_, offset, false, access, access, VM_INHERIT_NONE);
++  }
++
++ private:
++  mach_port_t entry_ = MACH_PORT_NULL;
++};
++
++}  // namespace rex::memory::ios
+diff --git a/include/rex/system/xmemory.h b/include/rex/system/xmemory.h
+index 527b612..8391e26 100644
+--- a/include/rex/system/xmemory.h
++++ b/include/rex/system/xmemory.h
+@@ -20,6 +20,9 @@
+ #include <rex/memory/utils.h>
+ #include <rex/ppc/func.h>  // PPCFunc type
+ #include <rex/system/mmio_handler.h>
++#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
++#include <rex/system/ios_guest_backing.h>
++#endif
+ #include <rex/thread/mutex.h>
+
+ namespace rex::stream {
+@@ -648,6 +651,9 @@ class Memory {
+   std::vector<FunctionTableEntry> function_tables_;
+   mutable std::mutex function_tables_mutex_;
+
++#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
++  ios::GuestBacking ios_backing_;
++#endif
+   rex::memory::FileMappingHandle mapping_ = rex::memory::kFileMappingHandleInvalid;
+   uint8_t* mapping_base_ = nullptr;
+   union {
+diff --git a/src/system/xmemory.cpp b/src/system/xmemory.cpp
+index 907dcd4..3a3d81a 100644
+--- a/src/system/xmemory.cpp
++++ b/src/system/xmemory.cpp
+@@ -14,6 +14,8 @@
+ #include <cstring>
+ #include <utility>
+
++#include <rex/platform.h>
++
+ #if REX_PLATFORM_MAC || REX_PLATFORM_LINUX
+ #include <fcntl.h>
+ #include <sys/mman.h>
+@@ -131,6 +133,9 @@ Memory::~Memory() {
+   heaps_.physical.Dispose();
+
+   // Unmap all views and close mapping.
++#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
++  UnmapViews();
++#else
+   if (mapping_ != rex::memory::kFileMappingHandleInvalid) {
+     UnmapViews();
+     rex::memory::CloseFileMappingHandle(mapping_, file_name_);
+@@ -138,6 +143,7 @@ Memory::~Memory() {
+     mapping_ = rex::memory::kFileMappingHandleInvalid;
+   }
+
++#endif
+   virtual_membase_ = nullptr;
+   physical_membase_ = nullptr;
+ }
+@@ -151,6 +157,13 @@ bool Memory::Initialize() {
+   const size_t mapping_size =
+       rex::round_up(static_cast<size_t>(0x120000000ull) + system_allocation_granularity_,
+                     static_cast<size_t>(system_allocation_granularity_));
++#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
++  const kern_return_t backing_result = ios_backing_.Create(mapping_size);
++  if (backing_result != KERN_SUCCESS) {
++    REXSYS_ERROR("Unable to create the guest Mach memory object: {}", backing_result);
++    return false;
++  }
++#else
+   mapping_ = rex::memory::CreateFileMappingHandle(file_name_, mapping_size,
+                                                   rex::memory::PageAccess::kReadWrite, false);
+   if (mapping_ == rex::memory::kFileMappingHandleInvalid) {
+@@ -159,6 +172,7 @@ bool Memory::Initialize() {
+     return false;
+   }
+
++#endif
+ #if REX_PLATFORM_WIN32 || defined(REX_PHYSICAL_HEAP_4K_PAGES)
+   // Generated code and PhysicalHostOffset add nothing to accesses at
+   // 0xE0000000 and above in this build (REX_PHYS_HOST_OFFSET is 0), so the
+@@ -370,6 +384,12 @@ int Memory::MapViewsReserved() {
+                                            map_info[n].virtual_address_start + 1);
+     size_t file_offset = static_cast<size_t>(map_info[n].target_address & granularity_mask);
+     void* target_address = mapping_base + map_info[n].virtual_address_start;
++#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
++    const kern_return_t result = ios_backing_.MapReserved(target_address, view_size, file_offset);
++    if (result != KERN_SUCCESS) {
++      REXSYS_ERROR("MapViewsReserved: Mach view {} size {:#x} offset {:#x} failed: {}",
++                   n, view_size, file_offset, result);
++#else
+     void* result = mmap(target_address, view_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED,
+                         mapping_, file_offset);
+     if (result == MAP_FAILED || result != target_address) {
+@@ -378,6 +398,7 @@ int Memory::MapViewsReserved() {
+           "MapViewsReserved: map failed view {} addr 0x{:016X} size 0x{:X} offset 0x{:X} err {} ({})", n,
+           reinterpret_cast<uintptr_t>(target_address), view_size, file_offset, err,
+           std::strerror(err));
++#endif
+       munmap(reserved_base, total_size);
+       for (auto& view : views_.all_views) {
+         view = nullptr;
+@@ -419,7 +440,12 @@ void Memory::UnmapViews() {
+   for (size_t n = 0; n < rex::countof(views_.all_views); n++) {
+     if (views_.all_views[n]) {
+       size_t length = map_info[n].virtual_address_end - map_info[n].virtual_address_start + 1;
++#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
++      munmap(views_.all_views[n], length);
++#else
+       rex::memory::UnmapFileView(mapping_, views_.all_views[n], length);
++#endif
++      views_.all_views[n] = nullptr;
+     }
+   }
+ }
+diff --git a/src/ui/windowed_app_context_sdl.cpp b/src/ui/windowed_app_context_sdl.cpp
+index b49bb86..8f9b63a 100644
+--- a/src/ui/windowed_app_context_sdl.cpp
++++ b/src/ui/windowed_app_context_sdl.cpp
+@@ -41,7 +41,11 @@ bool SDLWindowedAppContext::Initialize() {
+   // Picked before SDL_InitSubSystem, long before a graphics instance can say
+   // which surface extensions it has, so the cvar is the escape hatch.
+   std::string requested_driver = REXCVAR_GET(video_driver);
+-#if REX_PLATFORM_MAC
++#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
++  if (requested_driver.empty()) {
++    requested_driver = "uikit";
++  }
++#elif REX_PLATFORM_MAC
+   // macOS presents via a CAMetalLayer surface obtained from the Cocoa driver.
+   if (requested_driver.empty()) {
+     requested_driver = "cocoa";

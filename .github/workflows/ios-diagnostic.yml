@@ -1,0 +1,66 @@
+name: iOS diagnostic build
+
+on:
+  push:
+    branches: [ios/bringup]
+    paths:
+      - '.github/workflows/ios-diagnostic.yml'
+      - 'ios/bringup/**'
+      - 'thirdparty/shiftglue-sdk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare pinned dependencies
+        run: |
+          sdk=thirdparty/shiftglue-sdk
+          git submodule update --init "$sdk"
+          git -C "$sdk" apply --check "$GITHUB_WORKSPACE/ios/bringup/shiftglue-ios.patch"
+          git -C "$sdk" apply "$GITHUB_WORKSPACE/ios/bringup/shiftglue-ios.patch"
+          git -C "$sdk" submodule update --init --depth 1 \
+            thirdparty/sdl3 thirdparty/vulkan-headers thirdparty/moltenvk
+
+      - name: Build MoltenVK for physical iOS devices
+        working-directory: thirdparty/shiftglue-sdk/thirdparty/moltenvk
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          ./fetchDependencies --ios
+          make ios
+
+      - name: Compile the unsigned diagnostic app
+        run: |
+          mvk="$PWD/thirdparty/shiftglue-sdk/thirdparty/moltenvk"
+          cmake -S ios/bringup -B build/ios-probe -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DMOLTENVK_XCFRAMEWORK="$mvk/Package/Latest/MoltenVK/static/MoltenVK.xcframework"
+          cmake --build build/ios-probe --config Debug --target pinyon_ios_probe \
+            -- CODE_SIGNING_ALLOWED=NO "CONFIGURATION_BUILD_DIR=$PWD/build/ios-product"
+
+      - name: Verify and archive the unsigned app
+        run: |
+          app=build/ios-product/PinyonShiftProbe.app
+          plutil -lint "$app/Info.plist"
+          test "$(xcrun lipo -archs "$app/PinyonShiftProbe")" = arm64
+          xcrun vtool -show-build "$app/PinyonShiftProbe" | tee build/ios-platform.txt
+          grep -Eq '^[[:space:]]*platform[[:space:]]+IOS[[:space:]]*$' build/ios-platform.txt
+          ditto -c -k --keepParent "$app" build/PinyonShiftProbe-unsigned.zip
+
+      - name: Upload unsigned app
+        uses: actions/upload-artifact@v4
+        with:
+          name: PinyonShiftProbe-unsigned-arm64
+          path: build/PinyonShiftProbe-unsigned.zip
+          if-no-files-found: error

@@ -99,7 +99,12 @@ REXCVAR_DEFINE_INT32(fh1_frame_inspector_view, 0, "GPU",
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 #endif
 
-REXCVAR_DEFINE_BOOL(pinyon_shift_touch_controls, REX_PLATFORM_ANDROID, "Pinyon Shift",
+#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
+constexpr bool kTouchControlsDefault = true;
+#else
+constexpr bool kTouchControlsDefault = REX_PLATFORM_ANDROID;
+#endif
+REXCVAR_DEFINE_BOOL(pinyon_shift_touch_controls, kTouchControlsDefault, "Pinyon Shift",
                     "On-screen controls for touch screens: a steering stick, throttle, brake "
                     "and buttons, shown on a touch and hidden after a while without one")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
@@ -687,9 +692,13 @@ std::unique_ptr<rex::ui::WindowedApp> PinyonShiftApp::Create(
 void PinyonShiftApp::OnConfigurePaths(rex::PathConfig& paths) {
   namespace diagnostics = pinyon_shift::diagnostics;
   const auto& state_root = diagnostics::StateRoot();
+#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
+  paths.game_data_root = state_root / "game";
+#else
   if (auto game_root = diagnostics::EnvironmentPath("PINYON_SHIFT_GAME_ROOT")) {
     paths.game_data_root = *game_root;
   }
+#endif
   paths.user_data_root = LongHostPath(state_root / "user");
 #if defined(PINYON_SHIFT_TITLE_UPDATE_V4) && PINYON_SHIFT_TITLE_UPDATE_V4
   // The v4 build's code was generated from the patched executables: load the

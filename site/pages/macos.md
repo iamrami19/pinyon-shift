@@ -60,3 +60,9 @@ needs the affected Mac's compiler and header evidence.
 ## Intel Macs (experimental)
 
 From 0.8.1, releases also include `PinyonShift-Launcher-macos-x86_64.zip` for Intel Macs on macOS 13.3 or newer. Install and play the same way. The build has only run under Rosetta on an Apple silicon Mac, where it reached free roam and drew it correctly; it has not run on an Intel or AMD Mac GPU yet. Expect rendering bugs and lower frame rates, and please report what you see. A Radeon Pro 5500M or newer is the realistic target; Intel UHD 630 and Iris graphics are in the class of the UHD 620, which drew about 20 fps at ULTRA LOW 30 on Windows. Details in [docs/MACOS.md](https://github.com/arcanite24/pinyon-shift/blob/dev/docs/MACOS.md#intel-macs-experimental).
+## iOS developer probe
+
+The experimental iOS branch adds a separate Xcode target for testing UIKit,
+guest memory aliases, writable app storage and a blue test frame through
+MoltenVK without a disc. It reports results in the Xcode console. Gameplay on iPhone still needs
+the complete ShiftGlue runtime and renderer wired into an iOS app.

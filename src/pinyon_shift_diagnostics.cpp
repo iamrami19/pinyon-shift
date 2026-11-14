@@ -23,6 +23,13 @@
 #include "crash_reporter.h"
 #include "platform/host_platform.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
+#include <SDL3/SDL_filesystem.h>
+#endif
+
 // After every other header: its __cpuid macro breaks the declaration of the
 // function of the same name in clang's MSVC <intrin.h>, which fmt includes
 // (issue #325, where no precompiled header had included it first).
@@ -235,8 +242,17 @@ bool InitializeEarly() {
     return CpuHasSse41();
   }
 
+#if defined(TARGET_OS_IOS) && TARGET_OS_IOS
+  const char* documents = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+  if (!documents) {
+    REXLOG_ERROR("Cannot locate the iOS Documents folder");
+    return false;
+  }
+  g_state_root = std::filesystem::path(documents) / "PinyonShift";
+#else
   g_state_root = EnvironmentPath("PINYON_SHIFT_STATE_ROOT")
                      .value_or(ExecutableDirectory() / "pinyon_shift_state");
+#endif
   g_state_root = std::filesystem::absolute(g_state_root).lexically_normal();
   g_session_id = UtcTimestamp(true) + "-p" + std::to_string(platform::ProcessId());
   g_event_path = g_state_root / "logs" / (g_session_id + ".jsonl");
