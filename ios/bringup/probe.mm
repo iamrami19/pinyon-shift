@@ -1,4 +1,4 @@
-#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <SDL3/SDL.h>
@@ -20,6 +20,11 @@
 
 namespace {
 
+struct SandboxResult {
+  bool read_back = false;
+  bool persisted = false;
+};
+
 struct Probe {
   SDL_Window* window = nullptr;
   SDL_MetalView view = nullptr;
@@ -27,7 +32,9 @@ struct Probe {
   VkSurfaceKHR surface = VK_NULL_HANDLE;
   VkPhysicalDevice physical = VK_NULL_HANDLE;
   uint32_t queue_family = 0;
-  bool prerequisites_ok = false;
+  bool mach_ok = false;
+  SandboxResult sandbox;
+  UILabel* status_label = nil;
   bool attempted = false;
   std::unique_ptr<FirstFrame> frame;
 };
@@ -73,29 +80,71 @@ bool CheckMachAliases() {
   return shared;
 }
 
-bool CheckSandbox() {
+SandboxResult CheckSandbox() {
   NSFileManager* manager = NSFileManager.defaultManager;
   NSURL* documents = [manager URLsForDirectory:NSDocumentDirectory
                                      inDomains:NSUserDomainMask].firstObject;
   if (!documents) {
     SDL_Log("Sandbox Documents: FAIL (no URL)");
-    return false;
+    return {};
   }
   NSURL* state = [documents URLByAppendingPathComponent:@"PinyonShiftProbe" isDirectory:YES];
   NSURL* marker = [state URLByAppendingPathComponent:@"probe-state.txt" isDirectory:NO];
   NSError* error = nil;
   NSData* previous = [NSData dataWithContentsOfURL:marker];
   NSData* expected = [@"Pinyon Shift iOS probe\n" dataUsingEncoding:NSUTF8StringEncoding];
+  const bool persisted = [expected isEqualToData:previous];
   if (![manager createDirectoryAtURL:state withIntermediateDirectories:YES attributes:nil
                               error:&error] ||
       ![expected writeToURL:marker options:NSDataWritingAtomic error:&error]) {
     SDL_Log("Sandbox Documents: FAIL (%s)", error.localizedDescription.UTF8String);
-    return false;
+    return {false, persisted};
   }
   const bool read_back = [expected isEqualToData:[NSData dataWithContentsOfURL:marker]];
   SDL_Log("Sandbox Documents: %s (persisted from previous launch: %s)",
-          read_back ? "PASS" : "FAIL", [expected isEqualToData:previous] ? "yes" : "no");
-  return read_back;
+          read_back ? "PASS" : "FAIL", persisted ? "yes" : "no");
+  return {read_back, persisted};
+}
+
+void ShowResults(Probe& probe, bool queued) {
+  SDL_PropertiesID properties = SDL_GetWindowProperties(probe.window);
+  UIWindow* window = (__bridge UIWindow*)SDL_GetPointerProperty(
+      properties, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, nullptr);
+  if (!window) {
+    SDL_Log("UIKit status panel: native window unavailable");
+    return;
+  }
+
+  UILabel* label = [[UILabel alloc] init];
+  label.translatesAutoresizingMaskIntoConstraints = NO;
+  label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle3];
+  label.adjustsFontForContentSizeCategory = YES;
+  label.textColor = UIColor.whiteColor;
+  label.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.85];
+  label.textAlignment = NSTextAlignmentCenter;
+  label.numberOfLines = 0;
+  label.userInteractionEnabled = NO;
+  label.accessibilityIdentifier = @"pinyon-probe-results";
+  NSString* persistence = probe.sandbox.persisted ? @"OK" :
+      (probe.sandbox.read_back ? @"Vuelve a abrir la app" : @"Sin verificar");
+  label.text = [NSString stringWithFormat:
+      @"Pinyon Shift · Diagnóstico 0.2\n\n"
+       "Memoria Mach: %@\n"
+       "Escritura y lectura: %@\n"
+       "Persistencia: %@\n"
+       "MoltenVK: %@",
+      probe.mach_ok ? @"OK" : @"ERROR",
+      probe.sandbox.read_back ? @"OK" : @"ERROR",
+      persistence,
+      queued ? @"Cuadro enviado" : @"ERROR"];
+  [window addSubview:label];
+  UILayoutGuide* safe = window.safeAreaLayoutGuide;
+  [NSLayoutConstraint activateConstraints:@[
+      [label.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
+      [label.centerYAnchor constraintEqualToAnchor:safe.centerYAnchor],
+      [label.widthAnchor constraintEqualToAnchor:safe.widthAnchor multiplier:0.72],
+  ]];
+  probe.status_label = label;
 }
 
 bool CheckVulkan(Probe& probe, const CAMetalLayer* layer) {
@@ -205,10 +254,11 @@ SDL_AppResult SDL_AppInit(void** appstate, int, char**) {
     return SDL_APP_FAILURE;
   }
   CAMetalLayer* layer = (__bridge CAMetalLayer*)SDL_Metal_GetLayer(probe->view);
-  const bool sandbox_ok = CheckSandbox();
-  const bool mach_ok = CheckMachAliases();
-  const bool vulkan_ok = layer && CheckVulkan(*probe, layer);
-  probe->prerequisites_ok = sandbox_ok && mach_ok && vulkan_ok;
+  probe->sandbox = CheckSandbox();
+  probe->mach_ok = CheckMachAliases();
+  if (layer) {
+    CheckVulkan(*probe, layer);
+  }
   return SDL_APP_CONTINUE;
 }
 
@@ -240,13 +290,16 @@ SDL_AppResult SDL_AppIterate(void* appstate) {
       probe.frame = std::make_unique<FirstFrame>();
       queued = probe.frame->Present(probe.physical, probe.queue_family, probe.surface);
     }
-    SDL_Log("Pinyon iOS probe: %s", probe.prerequisites_ok && queued ? "PASS" : "FAIL");
+    ShowResults(probe, queued);
+    SDL_Log("Pinyon iOS probe: %s",
+            probe.sandbox.read_back && probe.mach_ok && queued ? "PASS" : "FAIL");
   }
   return SDL_APP_CONTINUE;
 }
 
 void SDL_AppQuit(void* appstate, SDL_AppResult) {
   auto* probe = static_cast<Probe*>(appstate);
+  [probe->status_label removeFromSuperview];
   probe->frame.reset();
   if (probe->surface) {
     vkDestroySurfaceKHR(probe->instance, probe->surface, nullptr);

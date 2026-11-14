@@ -7,7 +7,8 @@ parches. La app de diagnóstico arranca sin un disco y comprueba el contenedor
 de iOS, dos vistas de memoria compartida y una superficie Vulkan sobre Metal.
 El objetivo `pinyon_ios_probe` crea un dispositivo Vulkan, limpia una imagen
 de la cadena de presentación en azul y la envía a la pantalla. La consola de
-Xcode muestra el resultado de cada etapa.
+Xcode muestra el resultado de cada etapa. La versión 0.2 también muestra
+los resultados de memoria, almacenamiento y gráficos en el iPhone.
 
 ## 1. Preparar la rama
 
@@ -79,7 +80,10 @@ cmake --build out/ios-probe --config Debug --target pinyon_ios_probe -- CODE_SIG
    se muestre la pantalla azul. La prueba envía un cuadro por arranque y
    registra los eventos de ciclo de vida.
 4. Busca `Sandbox Documents: PASS`. Cierra y vuelve a lanzar la app para
-   confirmar `persisted from previous launch: yes`.
+   confirmar `persisted from previous launch: yes`. En la pantalla de la
+   app, comprueba `Memoria Mach: OK`, `Escritura y lectura: OK` y
+   `Persistencia: OK`. Si acabas de instalarla, puedes ver
+   `Vuelve a abrir la app` hasta que repitas la prueba.
 5. Toca la ventana, conecta un mando y vuelve desde segundo plano. La consola
    debe registrar los eventos correspondientes. Conserva el log si algo falla.
 

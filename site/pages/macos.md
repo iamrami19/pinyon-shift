@@ -64,5 +64,6 @@ From 0.8.1, releases also include `PinyonShift-Launcher-macos-x86_64.zip` for In
 
 The experimental iOS branch adds a separate Xcode target for testing UIKit,
 guest memory aliases, writable app storage and a blue test frame through
-MoltenVK without a disc. It reports results in the Xcode console. Gameplay on iPhone still needs
+MoltenVK without a disc. It displays memory and storage results on the device
+and logs details to the Xcode console. Gameplay on iPhone still needs
 the complete ShiftGlue runtime and renderer wired into an iOS app.
